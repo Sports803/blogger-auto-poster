@@ -11,15 +11,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 STATE_FILE = "last_post.json"
 
-def clean_html(raw_html):
-    """Remove HTML tags and clean up whitespace."""
-    if not raw_html:
-        return ""
-    # Remove HTML tags
-    clean_text = re.sub(r'<[^>]+>', '', raw_html)
-    # Replace multiple spaces/newlines with a single space
-    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-    return clean_text
+# Patreon donation link (fixed)
+DONATE_URL = "https://www.patreon.com/Alvinalexa?utm_campaign=creatorshare_creator"
 
 def get_last_post_id():
     if os.path.exists(STATE_FILE):
@@ -31,6 +24,28 @@ def get_last_post_id():
 def save_last_post_id(post_id):
     with open(STATE_FILE, "w") as f:
         json.dump({"last_id": post_id}, f)
+
+def strip_html(html):
+    """Remove HTML tags and decode common entities."""
+    if not html:
+        return ""
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', ' ', html)
+    # Decode common HTML entities
+    text = text.replace('&nbsp;', ' ').replace('&amp;', '&')
+    text = text.replace('&lt;', '<').replace('&gt;', '>')
+    text = text.replace('&quot;', '"').replace('&#39;', "'")
+    # Collapse multiple spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def clean_description(raw_html, max_length=150):
+    """Convert HTML to plain text and truncate to 120-150 characters."""
+    plain = strip_html(raw_html)
+    if len(plain) > max_length:
+        # Cut at the last full word
+        plain = plain[:max_length].rsplit(' ', 1)[0] + '…'
+    return plain
 
 def get_new_posts():
     if not BLOGGER_RSS:
@@ -49,19 +64,35 @@ def get_new_posts():
 
 def post_to_telegram(title, url, description=""):
     try:
-        # Clean HTML and truncate description to ~150 chars
-        plain_desc = clean_html(description)
-        if len(plain_desc) > 150:
-            plain_desc = plain_desc[:147] + "..."
-            
-        text = f"📝 *{title}*\n\n{plain_desc}\n\n🔗 {url}" if plain_desc else f"📝 *{title}*\n\n🔗 {url}"
+        # Clean description (120-150 chars, plain text)
+        clean_desc = clean_description(description, max_length=150)
+        
+        # Format message: Bold title, normal description, link
+        if clean_desc:
+            text = f"*{title}*\n\n{clean_desc}\n\n🔗 {url}"
+        else:
+            text = f"*{title}*\n\n🔗 {url}"
+        
+        # Build inline keyboard buttons
+        reply_markup = {
+            "inline_keyboard": [
+                [{"text": "📺 Watch", "url": url}],
+                [{"text": "❤️ Donate", "url": DONATE_URL}]
+            ]
+        }
         
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": text,
-            "parse_mode": "Markdown"
+            "parse_mode": "Markdown",
+            "reply_markup": json.dumps(reply_markup)  # Must be JSON string
         }
-        resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data=payload)
+        
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data=payload
+        )
+        
         if resp.status_code == 200:
             print(f"✅ Telegram: {title}")
         else:
@@ -79,8 +110,7 @@ def main():
     for p in posts:
         title = p.title
         url = p.link
-        # Use 'summary' or 'description' from RSS entry
-        desc = getattr(p, "summary", getattr(p, "description", ""))
+        desc = getattr(p, "summary", "")
         print(f"\n📄 Processing: {title}")
         post_to_telegram(title, url, desc)
         save_last_post_id(p.id)
