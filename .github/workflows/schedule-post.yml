@@ -2,43 +2,75 @@ name: Auto-Poster (Telegram)
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # every 30 minutes
-  workflow_dispatch:         # manual trigger
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run without posting'
+        type: boolean
+        default: false
 
 concurrency:
   group: blogger-feed-poster
   cancel-in-progress: false
 
+permissions:
+  contents: write   # needed to push state back
+
 jobs:
   post:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      # --- Persistent state via a dedicated branch ---
       - name: Restore posted-item state
-        uses: actions/cache/restore@v4
-        with:
-          path: posted_items.json
-          key: state-cache-${{ github.repository }}-${{ github.run_id }}
-          restore-keys: |
-            state-cache-${{ github.repository }}-
+        run: |
+          git fetch origin state:state || echo "no state branch yet"
+          if git show-ref --verify --quiet refs/heads/state; then
+            git show state:posted_items.json > posted_items.json || true
+          fi
+
       - name: Run poster
         env:
           BLOGGER_RSS: ${{ secrets.BLOGGER_RSS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MAX_ITEMS_PER_RUN: '50'
+          MAX_ITEMS_PER_RUN: '15'
+          DRY_RUN: ${{ inputs.dry_run }}
         run: python poster.py
+
       - name: Save posted-item state
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: posted_items.json
-          key: state-cache-${{ github.repository }}-${{ github.run_id }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan state-tmp
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          cp posted_items.json . 2>/dev/null || true
+          git add -f posted_items.json
+          git commit -m "state: $(date -u +%FT%TZ)" || echo "no state change"
+          git push -f origin HEAD:state
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### Auto-Poster run"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            echo "- Dry run: \`${{ inputs.dry_run }}\`"
+            echo "- Tracked items: $(python -c "import json;print(len(json.load(open('posted_items.json'))))" 2>/dev/null || echo '?')"
+          } >> "$GITHUB_STEP_SUMMARY"
