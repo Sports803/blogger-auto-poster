@@ -1,4 +1,4 @@
-name: Auto-Poster (Telegram)
+name: Auto-Poster (Telegram + Buffer)
 
 on:
   schedule:
@@ -49,6 +49,10 @@ jobs:
           BLOGGER_RSS: ${{ secrets.BLOGGER_RSS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+          BUFFER_MODE: ${{ vars.BUFFER_MODE || 'addToQueue' }}
+          BUFFER_DUE_AT: ${{ vars.BUFFER_DUE_AT }}
           MAX_ITEMS_PER_RUN: '15'
           DRY_RUN: ${{ inputs.dry_run }}
         run: python poster.py
@@ -72,5 +76,5 @@ jobs:
             echo "### Auto-Poster run"
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Dry run: \`${{ inputs.dry_run }}\`"
-            echo "- Tracked items: $(python -c "import json;print(len(json.load(open('posted_items.json'))))" 2>/dev/null || echo '?')"
+            echo "- Tracked items: $(python -c "import json; print(len(json.load(open('posted_items.json')).get('posted', {})))" 2>/dev/null || echo '?')"
           } >> "$GITHUB_STEP_SUMMARY"
